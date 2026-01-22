@@ -454,20 +454,64 @@ HTML_PAGE = '''<!DOCTYPE html>
                 const ukaz = result.ukaz_809 || {};
                 const rasp = result.rasporyazhenie_1734 || {};
                 const conclusion = result.conclusion || {};
-                return `<div class="bg-white rounded-xl shadow-lg p-6 fade-in">
-                    <div class="flex justify-between items-start mb-4">
-                        <div><h3 class="font-semibold">📄 ${result.filename || result.document_name}</h3><p class="text-sm text-gray-500">${result.summary || ''}</p></div>
-                    </div>
-                    <div class="grid grid-cols-2 gap-4 mb-4">
-                        <div class="bg-gray-50 rounded-lg p-3"><p class="text-sm font-medium">Указ № 809</p><p class="text-sm">✅ ${(ukaz.matches||[]).length} | ❌ ${(ukaz.contradictions||[]).length}</p></div>
-                        <div class="bg-gray-50 rounded-lg p-3"><p class="text-sm font-medium">Распоряжение № 1734-р</p><p class="text-sm">✅ ${(rasp.matches||[]).length} | ❌ ${(rasp.contradictions||[]).length}</p></div>
-                    </div>
-                    <div class="flex justify-between items-center">
-                        <span class="text-sm font-medium">${conclusion.status || ''}</span>
-                        <button onclick="downloadSingle(${index})" class="bg-blue-600 text-white px-3 py-1 rounded text-sm">📥 DOCX</button>
-                    </div>
-                </div>`;
+                const statusColor = conclusion.status === 'соответствует' ? 'green' : conclusion.status === 'частично соответствует' ? 'yellow' : 'red';
+
+                const renderList = (items, type) => {
+                    if (!items || items.length === 0) return '<p class="text-gray-400 text-sm italic">Не выявлено</p>';
+                    return items.map(item => {
+                        const ref = type === 'ukaz' ? item.ukaz_reference : item.rasp_reference;
+                        return '<div class="mb-2 text-sm"><b>' + (item.doc_reference || '') + '</b>: ' + (item.description || '') + ' <span class="text-gray-500">(' + (ref || '') + ')</span>' + (item.recommendation ? '<br><span class="text-blue-600">→ ' + item.recommendation + '</span>' : '') + '</div>';
+                    }).join('');
+                };
+
+                return '<div class="bg-white rounded-xl shadow-lg overflow-hidden fade-in border-l-4 border-' + statusColor + '-500">' +
+                    '<div class="p-6">' +
+                        '<div class="flex justify-between items-start mb-3">' +
+                            '<div><h3 class="font-semibold text-lg">📄 ' + (result.filename || result.document_name) + '</h3>' +
+                            '<p class="text-sm text-gray-500 mt-1">' + (result.summary || '') + '</p></div>' +
+                            '<span class="px-3 py-1 rounded-full text-sm font-medium bg-' + statusColor + '-100 text-' + statusColor + '-800">' + (conclusion.status || 'Анализ завершён') + '</span>' +
+                        '</div>' +
+                        '<div class="grid grid-cols-2 gap-4 mb-4">' +
+                            '<div class="bg-gray-50 rounded-lg p-3"><p class="text-sm font-medium text-gray-700">Указ № 809</p><p class="text-sm mt-1"><span class="text-green-600">✅ ' + (ukaz.matches||[]).length + ' совпад.</span> | <span class="text-red-600">❌ ' + (ukaz.contradictions||[]).length + ' расхожд.</span></p></div>' +
+                            '<div class="bg-gray-50 rounded-lg p-3"><p class="text-sm font-medium text-gray-700">Распоряжение № 1734-р</p><p class="text-sm mt-1"><span class="text-green-600">✅ ' + (rasp.matches||[]).length + ' совпад.</span> | <span class="text-red-600">❌ ' + (rasp.contradictions||[]).length + ' расхожд.</span></p></div>' +
+                        '</div>' +
+                        (conclusion.summary ? '<div class="bg-blue-50 rounded-lg p-3 mb-4"><p class="text-sm font-medium text-blue-800">📝 Итог:</p><p class="text-sm text-blue-700 mt-1">' + conclusion.summary + '</p></div>' : '') +
+                        '<div class="flex justify-between items-center">' +
+                            '<button onclick="toggleDetails(' + index + ')" class="text-blue-600 hover:text-blue-800 text-sm font-medium" id="toggleBtn' + index + '">▼ Подробнее</button>' +
+                            '<button onclick="downloadSingle(' + index + ')" class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700">📥 Скачать DOCX</button>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div id="details' + index + '" class="hidden border-t bg-gray-50 p-6">' +
+                        '<div class="grid md:grid-cols-2 gap-6">' +
+                            '<div>' +
+                                '<h4 class="font-bold text-gray-800 mb-3">📜 Указ № 809</h4>' +
+                                '<div class="mb-4"><p class="text-green-700 font-medium mb-2">✅ Соответствует:</p>' + renderList(ukaz.matches, 'ukaz') + '</div>' +
+                                '<div><p class="text-red-700 font-medium mb-2">❌ Расходится:</p>' + renderList(ukaz.contradictions, 'ukaz') + '</div>' +
+                            '</div>' +
+                            '<div>' +
+                                '<h4 class="font-bold text-gray-800 mb-3">📋 Распоряжение № 1734-р</h4>' +
+                                '<div class="mb-4"><p class="text-green-700 font-medium mb-2">✅ Соответствует:</p>' + renderList(rasp.matches, 'rasp') + '</div>' +
+                                '<div><p class="text-red-700 font-medium mb-2">❌ Расходится:</p>' + renderList(rasp.contradictions, 'rasp') + '</div>' +
+                            '</div>' +
+                        '</div>' +
+                        (conclusion.priority_recommendations && conclusion.priority_recommendations.length > 0 ?
+                            '<div class="mt-6 bg-yellow-50 rounded-lg p-4"><p class="font-medium text-yellow-800 mb-2">⚡ Приоритетные рекомендации:</p><ul class="list-disc list-inside text-sm text-yellow-700">' +
+                            conclusion.priority_recommendations.map(r => '<li>' + r + '</li>').join('') + '</ul></div>' : '') +
+                    '</div>' +
+                '</div>';
             }).join('');
+        }
+
+        function toggleDetails(index) {
+            const details = document.getElementById('details' + index);
+            const btn = document.getElementById('toggleBtn' + index);
+            if (details.classList.contains('hidden')) {
+                details.classList.remove('hidden');
+                btn.textContent = '▲ Скрыть';
+            } else {
+                details.classList.add('hidden');
+                btn.textContent = '▼ Подробнее';
+            }
         }
 
         function downloadSingle(index) { if (currentSessionId) window.location.href = `/nparggu/api/export/${currentSessionId}/${index}`; }
