@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Экспертиза локальных актов РГГУ</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .drag-over {
+            border-color: #3b82f6 !important;
+            background-color: #eff6ff !important;
+        }
+        .fade-in {
+            animation: fadeIn 0.3s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3b82f6;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div class="container mx-auto px-4 py-8 max-w-4xl">
+        <!-- Заголовок -->
+        <div class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-800 mb-2">
+                Экспертиза локальных актов РГГУ
+            </h1>
+            <p class="text-gray-600">
+                Анализ на соответствие Указу Президента РФ № 809 и Распоряжению Правительства РФ № 1734-р
+            </p>
+        </div>
+
+        <!-- Зона загрузки -->
+        <div class="bg-white rounded-xl shadow-lg p-6 mb-8">
+            <div
+                id="dropZone"
+                class="border-2 border-dashed border-gray-300 rounded-lg p-12 text-center cursor-pointer transition-all hover:border-blue-400 hover:bg-blue-50"
+            >
+                <div class="text-6xl mb-4">📁</div>
+                <p class="text-lg text-gray-700 mb-2">
+                    Перетащите файлы сюда
+                </p>
+                <p class="text-gray-500 mb-4">
+                    или нажмите для выбора
+                </p>
+                <p class="text-sm text-gray-400">
+                    PDF, DOCX, TXT (до 20 файлов)
+                </p>
+                <input
+                    type="file"
+                    id="fileInput"
+                    multiple
+                    accept=".pdf,.docx,.doc,.txt"
+                    class="hidden"
+                >
+            </div>
+
+            <!-- Список выбранных файлов -->
+            <div id="fileList" class="mt-4 hidden">
+                <h3 class="font-semibold text-gray-700 mb-2">Выбранные файлы:</h3>
+                <ul id="fileListItems" class="space-y-2"></ul>
+            </div>
+
+            <!-- Кнопка анализа -->
+            <button
+                id="analyzeBtn"
+                class="w-full mt-6 bg-blue-600 text-white py-3 px-6 rounded-lg font-semibold hover:bg-blue-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed hidden"
+            >
+                ▶ Провести экспертизу
+            </button>
+        </div>
+
+        <!-- Прогресс -->
+        <div id="progressSection" class="bg-white rounded-xl shadow-lg p-6 mb-8 hidden">
+            <div class="flex items-center gap-3">
+                <div class="spinner"></div>
+                <span id="progressText" class="text-gray-700">Анализ документов...</span>
+            </div>
+            <div class="mt-4 bg-gray-200 rounded-full h-2">
+                <div id="progressBar" class="bg-blue-600 h-2 rounded-full transition-all" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <!-- Результаты -->
+        <div id="resultsSection" class="hidden">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-bold text-gray-800">Результаты экспертизы</h2>
+                <button
+                    id="exportAllBtn"
+                    class="bg-green-600 text-white py-2 px-4 rounded-lg font-semibold hover:bg-green-700 transition-colors flex items-center gap-2"
+                >
+                    📥 Скачать все (ZIP)
+                </button>
+            </div>
+            <div id="resultsList" class="space-y-4"></div>
+        </div>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
+        const fileListItems = document.getElementById('fileListItems');
+        const analyzeBtn = document.getElementById('analyzeBtn');
+        const progressSection = document.getElementById('progressSection');
+        const progressText = document.getElementById('progressText');
+        const progressBar = document.getElementById('progressBar');
+        const resultsSection = document.getElementById('resultsSection');
+        const resultsList = document.getElementById('resultsList');
+        const exportAllBtn = document.getElementById('exportAllBtn');
+
+        let selectedFiles = [];
+        let currentSessionId = null;
+
+        // Drag & Drop
+        dropZone.addEventListener('click', () => fileInput.click());
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('drag-over');
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('drag-over');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drag-over');
+            handleFiles(e.dataTransfer.files);
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            handleFiles(e.target.files);
+        });
+
+        function handleFiles(files) {
+            selectedFiles = Array.from(files).slice(0, 20);
+            updateFileList();
+        }
+
+        function updateFileList() {
+            if (selectedFiles.length === 0) {
+                fileList.classList.add('hidden');
+                analyzeBtn.classList.add('hidden');
+                return;
+            }
+
+            fileList.classList.remove('hidden');
+            analyzeBtn.classList.remove('hidden');
+
+            fileListItems.innerHTML = selectedFiles.map((file, i) => `
+                <li class="flex items-center justify-between bg-gray-50 rounded-lg px-4 py-2">
+                    <span class="text-gray-700">📄 ${file.name}</span>
+                    <button onclick="removeFile(${i})" class="text-red-500 hover:text-red-700">✕</button>
+                </li>
+            `).join('');
+        }
+
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            updateFileList();
+        }
+
+        // Анализ
+        analyzeBtn.addEventListener('click', async () => {
+            if (selectedFiles.length === 0) return;
+
+            analyzeBtn.disabled = true;
+            progressSection.classList.remove('hidden');
+            resultsSection.classList.add('hidden');
+            progressBar.style.width = '10%';
+            progressText.textContent = `Анализ документов (0/${selectedFiles.length})...`;
+
+            const formData = new FormData();
+            selectedFiles.forEach(file => formData.append('files', file));
+
+            try {
+                progressBar.style.width = '30%';
+
+                const response = await fetch('/api/analyze', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                progressBar.style.width = '90%';
+
+                if (!response.ok) {
+                    throw new Error('Ошибка сервера');
+                }
+
+                const data = await response.json();
+                currentSessionId = data.session_id;
+
+                progressBar.style.width = '100%';
+                progressText.textContent = 'Готово!';
+
+                setTimeout(() => {
+                    progressSection.classList.add('hidden');
+                    displayResults(data.results);
+                }, 500);
+
+            } catch (error) {
+                alert('Ошибка: ' + error.message);
+                progressSection.classList.add('hidden');
+            } finally {
+                analyzeBtn.disabled = false;
+            }
+        });
+
+        function displayResults(results) {
+            resultsSection.classList.remove('hidden');
+
+            resultsList.innerHTML = results.map((result, index) => {
+                if (result.error) {
+                    return `
+                        <div class="bg-white rounded-xl shadow-lg p-6 fade-in border-l-4 border-red-500">
+                            <div class="flex items-center gap-3">
+                                <span class="text-2xl">❌</span>
+                                <div>
+                                    <h3 class="font-semibold text-gray-800">${result.filename}</h3>
+                                    <p class="text-red-600">${result.error}</p>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                const ukaz = result.ukaz_809 || {};
+                const rasp = result.rasporyazhenie_1734 || {};
+                const conclusion = result.conclusion || {};
+
+                const statusColor = {
+                    'соответствует': 'green',
+                    'частично соответствует': 'yellow',
+                    'требует доработки': 'red'
+                }[conclusion.status] || 'gray';
+
+                const statusIcon = {
+                    'соответствует': '✅',
+                    'частично соответствует': '⚠️',
+                    'требует доработки': '❌'
+                }[conclusion.status] || '❓';
+
+                return `
+                    <div class="bg-white rounded-xl shadow-lg overflow-hidden fade-in border-l-4 border-${statusColor}-500">
+                        <div class="p-6">
+                            <div class="flex justify-between items-start mb-4">
+                                <div class="flex items-center gap-3">
+                                    <span class="text-2xl">📄</span>
+                                    <div>
+                                        <h3 class="font-semibold text-gray-800">${result.filename || result.document_name}</h3>
+                                        <p class="text-sm text-gray-500">${result.summary || ''}</p>
+                                    </div>
+                                </div>
+                                <span class="text-2xl">${statusIcon}</span>
+                            </div>
+
+                            <!-- Краткая статистика -->
+                            <div class="grid grid-cols-2 gap-4 mb-4">
+                                <div class="bg-gray-50 rounded-lg p-3">
+                                    <p class="text-sm font-medium text-gray-600">Указ № 809</p>
+                                    <p class="text-sm">
+                                        <span class="text-green-600">✅ ${(ukaz.matches || []).length} совпад.</span> |
+                                        <span class="text-red-600">❌ ${(ukaz.contradictions || []).length} расхожд.</span>
+                                    </p>
+                                </div>
+                                <div class="bg-gray-50 rounded-lg p-3">
+                                    <p class="text-sm font-medium text-gray-600">Распоряжение № 1734-р</p>
+                                    <p class="text-sm">
+                                        <span class="text-green-600">✅ ${(rasp.matches || []).length} совпад.</span> |
+                                        <span class="text-red-600">❌ ${(rasp.contradictions || []).length} расхожд.</span>
+                                    </p>
+                                </div>
+                            </div>
+
+                            <!-- Статус -->
+                            <div class="flex items-center justify-between">
+                                <span class="inline-block bg-${statusColor}-100 text-${statusColor}-800 px-3 py-1 rounded-full text-sm font-medium">
+                                    ${conclusion.status || 'Анализ завершён'}
+                                </span>
+                                <div class="flex gap-2">
+                                    <button
+                                        onclick="toggleDetails(${index})"
+                                        class="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                                    >
+                                        ▼ Подробнее
+                                    </button>
+                                    <button
+                                        onclick="downloadSingle(${index})"
+                                        class="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700"
+                                    >
+                                        📥 DOCX
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Детали (скрыты по умолчанию) -->
+                        <div id="details-${index}" class="hidden border-t bg-gray-50 p-6">
+                            <!-- Указ 809 -->
+                            <div class="mb-6">
+                                <h4 class="font-bold text-gray-800 mb-3">📜 Указ Президента РФ № 809</h4>
+
+                                ${(ukaz.matches || []).length > 0 ? `
+                                    <div class="mb-3">
+                                        <p class="text-green-700 font-medium mb-2">✅ Соответствует:</p>
+                                        <ul class="space-y-2 ml-4">
+                                            ${(ukaz.matches || []).map(m => `
+                                                <li class="text-sm text-gray-700">
+                                                    <span class="font-medium">${m.doc_reference}:</span> ${m.description}
+                                                    <span class="text-gray-500 italic">(${m.ukaz_reference})</span>
+                                                </li>
+                                            `).join('')}
+                                        </ul>
+                                    </div>
+                                ` : ''}
+
+                                ${(ukaz.contradictions || []).length > 0 ? `
+                                    <div>
+                                        <p class="text-red-700 font-medium mb-2">❌ Расходится:</p>
+                                        <ul class="space-y-2 ml-4">
+                                            ${(ukaz.contradictions || []).map(c => `
+                                                <li class="text-sm text-gray-700">
+                                                    <span class="font-medium">${c.doc_reference}:</span> ${c.description}
+                                                    <span class="text-gray-500 italic">(${c.ukaz_reference})</span>
+                                                    ${c.recommendation ? `<br><span class="text-blue-600">💡 ${c.recommendation}</span>` : ''}
+                                                </li>
+                                            `).join('')}
+                                        </ul>
+                                    </div>
+                                ` : '<p class="text-gray-500 text-sm">Расхождений не выявлено</p>'}
+                            </div>
+
+                            <!-- Распоряжение 1734-р -->
+                            <div class="mb-6">
+                                <h4 class="font-bold text-gray-800 mb-3">📋 Распоряжение Правительства РФ № 1734-р</h4>
+
+                                ${(rasp.matches || []).length > 0 ? `
+                                    <div class="mb-3">
+                                        <p class="text-green-700 font-medium mb-2">✅ Соответствует:</p>
+                                        <ul class="space-y-2 ml-4">
+                                            ${(rasp.matches || []).map(m => `
+                                                <li class="text-sm text-gray-700">
+                                                    <span class="font-medium">${m.doc_reference}:</span> ${m.description}
+                                                    <span class="text-gray-500 italic">(${m.rasp_reference})</span>
+                                                </li>
+                                            `).join('')}
+                                        </ul>
+                                    </div>
+                                ` : ''}
+
+                                ${(rasp.contradictions || []).length > 0 ? `
+                                    <div>
+                                        <p class="text-red-700 font-medium mb-2">❌ Расходится:</p>
+                                        <ul class="space-y-2 ml-4">
+                                            ${(rasp.contradictions || []).map(c => `
+                                                <li class="text-sm text-gray-700">
+                                                    <span class="font-medium">${c.doc_reference}:</span> ${c.description}
+                                                    <span class="text-gray-500 italic">(${c.rasp_reference})</span>
+                                                    ${c.recommendation ? `<br><span class="text-blue-600">💡 ${c.recommendation}</span>` : ''}
+                                                </li>
+                                            `).join('')}
+                                        </ul>
+                                    </div>
+                                ` : '<p class="text-gray-500 text-sm">Расхождений не выявлено</p>'}
+                            </div>
+
+                            <!-- Заключение -->
+                            ${conclusion.summary ? `
+                                <div class="bg-white rounded-lg p-4 border">
+                                    <h4 class="font-bold text-gray-800 mb-2">📝 Итоговое заключение</h4>
+                                    <p class="text-gray-700">${conclusion.summary}</p>
+                                    ${(conclusion.priority_recommendations || []).length > 0 ? `
+                                        <div class="mt-3">
+                                            <p class="font-medium text-gray-700">Приоритетные рекомендации:</p>
+                                            <ul class="list-decimal ml-5 mt-1 text-sm text-gray-600">
+                                                ${conclusion.priority_recommendations.map(r => `<li>${r}</li>`).join('')}
+                                            </ul>
+                                        </div>
+                                    ` : ''}
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function toggleDetails(index) {
+            const details = document.getElementById(`details-${index}`);
+            details.classList.toggle('hidden');
+        }
+
+        function downloadSingle(index) {
+            if (currentSessionId) {
+                window.location.href = `/api/export/${currentSessionId}/${index}`;
+            }
+        }
+
+        exportAllBtn.addEventListener('click', () => {
+            if (currentSessionId) {
+                window.location.href = `/api/export-all/${currentSessionId}`;
+            }
+        });
+    </script>
+</body>
+</html>

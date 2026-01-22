@@ -1,0 +1,18 @@
+{
+  "builds": [
+    {
+      "src": "api/index.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/nparggu/(.*)",
+      "dest": "/api/index.py"
+    },
+    {
+      "src": "/nparggu",
+      "dest": "/api/index.py"
+    }
+  ]
+}
