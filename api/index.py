@@ -206,7 +206,7 @@ ANALYSIS_PROMPT = """Ты — эксперт по правовому анали�
 
 VALIDATION_PROMPT = """Ты — эксперт по классификации документов.
 
-Проанализируй следующий документ и определи, является ли он локальным нормативным актом (НПА) образовательной организации.
+Определи, является ли документ НОРМАТИВНО-ПРАВОВЫМ АКТОМ (НПА).
 
 === ДОКУМЕНТ ===
 Название: {doc_name}
@@ -214,29 +214,35 @@ VALIDATION_PROMPT = """Ты — эксперт по классификации �
 Текст (первые 3000 символов):
 {doc_text}
 
-=== КРИТЕРИИ НПА ОБРАЗОВАТЕЛЬНОЙ ОРГАНИЗАЦИИ ===
-Документ является НПА образовательной организации, если он:
-1. Содержит признаки официального документа (реквизиты, подписи, даты, номера)
-2. Относится к деятельности образовательной организации (вуза, института, университета, академии, колледжа, школы)
-3. Регулирует внутренние процессы: учебный процесс, стипендии, внутренний распорядок, положения о подразделениях, регламенты, порядки, правила, инструкции
-4. Может упоминать: РГГУ, студентов, обучающихся, преподавателей, кафедры, факультеты, деканат, ректорат и т.п.
+=== ЧТО ТАКОЕ НПА ===
+Нормативно-правовой акт — это официальный документ, который:
+- Устанавливает, изменяет или отменяет правовые нормы
+- Имеет обязательную юридическую силу
+- Принят уполномоченным органом (государственным или организацией)
 
-НЕ является НПА образовательной организации:
-- Художественная литература, статьи, эссе
-- Личная переписка
+ПРИМЕРЫ НПА:
+- Положения, регламенты, порядки, правила
+- Приказы, распоряжения (нормативного характера)
+- Инструкции, стандарты
+- Уставы, кодексы
+- Локальные акты организаций
+
+НЕ ЯВЛЯЕТСЯ НПА:
+- Художественная литература, книги, романы
+- Научные статьи, диссертации, рефераты
+- Новости, статьи СМИ, блоги
+- Личная переписка, письма
 - Рекламные материалы
-- Документы других организаций (не образовательных)
-- Научные статьи и диссертации
-- Новостные материалы
+- Договоры, контракты (индивидуальные акты)
+- Справки, выписки, отчёты
+- Презентации, методички
 
 === ОТВЕТ ===
 Верни JSON строго в формате:
 {{
-    "is_valid": true/false,
-    "document_type": "тип документа (например: 'Положение', 'Регламент', 'Приказ', 'Не НПА')",
-    "organization": "название организации если определено, иначе null",
-    "confidence": "high/medium/low",
-    "reason": "краткое обоснование решения (1-2 предложения)"
+    "is_npa": true/false,
+    "document_type": "тип документа",
+    "reason": "краткое обоснование (1 предложение)"
 }}
 
 Отвечай ТОЛЬКО валидным JSON."""
@@ -351,18 +357,18 @@ async def call_llm(prompt: str, max_tokens: int = 2048) -> str:
 
 
 async def validate_input_document(doc_name: str, doc_text: str) -> dict:
-    """Проверка: является ли документ НПА образовательной организации"""
+    """Проверка: является ли документ нормативно-правовым актом"""
     prompt = VALIDATION_PROMPT.format(
         doc_name=doc_name,
         doc_text=doc_text[:3000]
     )
 
     try:
-        content = await call_llm(prompt, max_tokens=512)
+        content = await call_llm(prompt, max_tokens=256)
         return json.loads(content)
     except (json.JSONDecodeError, Exception) as e:
         # При ошибке валидации пропускаем документ на анализ (fail-open)
-        return {"is_valid": True, "reason": "Ошибка валидации, документ допущен к анализу", "confidence": "low"}
+        return {"is_npa": True, "reason": "Ошибка валидации, документ допущен к анализу"}
 
 
 async def validate_output_quality(doc_name: str, doc_summary: str, analysis: dict) -> dict:
@@ -720,14 +726,14 @@ HTML_PAGE = '''<!DOCTYPE html>
         function renderResultCard(result, index) {
             if (result.error) {
                 const validationDetails = result.validation_details;
-                const isValidationError = result.error.includes('не является НПА');
+                const isValidationError = result.error.includes('нормативно-правовой акт');
                 return `<div class="bg-white rounded-xl shadow-lg p-6 border-l-4 border-${isValidationError ? 'orange' : 'red'}-500">
                     <div class="flex items-center gap-2">
                         <span class="text-xl">${isValidationError ? '⚠️' : '❌'}</span>
                         <span class="font-semibold">${result.filename}</span>
                     </div>
                     <p class="text-${isValidationError ? 'orange' : 'red'}-600 mt-2">${result.error}</p>
-                    ${validationDetails ? `<p class="text-sm text-gray-500 mt-1">Тип: ${validationDetails.document_type || 'Не определён'}</p>` : ''}
+                    ${validationDetails ? `<p class="text-sm text-gray-500 mt-1">${validationDetails.document_type || ''}${validationDetails.reason ? ': ' + validationDetails.reason : ''}</p>` : ''}
                 </div>`;
             }
 
@@ -881,13 +887,13 @@ async def analyze_single_file(
             # ========== КОНТУР 1: Проверка входных данных ==========
             validation = await validate_input_document(file.filename, text)
 
-            if not validation.get("is_valid", True):
+            if not validation.get("is_npa", True):
                 result = {
                     "filename": file.filename,
-                    "error": f"Документ не является НПА образовательной организации. {validation.get('reason', '')}",
+                    "error": "Это не нормативно-правовой акт, обратитесь к Михаилу.",
                     "validation_details": {
-                        "document_type": validation.get("document_type", "Неизвестно"),
-                        "confidence": validation.get("confidence", "unknown")
+                        "document_type": validation.get("document_type", "Не НПА"),
+                        "reason": validation.get("reason", "")
                     }
                 }
             else:
@@ -912,8 +918,7 @@ async def analyze_single_file(
                 # Добавляем информацию о валидации
                 analysis["input_validation"] = {
                     "document_type": validation.get("document_type", "НПА"),
-                    "organization": validation.get("organization"),
-                    "confidence": validation.get("confidence", "unknown")
+                    "is_npa": True
                 }
 
                 # Если качество плохое, добавляем предупреждение
