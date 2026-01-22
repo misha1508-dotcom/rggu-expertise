@@ -1,18 +1,12 @@
 {
-  "builds": [
+  "rewrites": [
     {
-      "src": "api/index.py",
-      "use": "@vercel/python"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/nparggu/(.*)",
-      "dest": "/api/index.py"
+      "source": "/nparggu/(.*)",
+      "destination": "/api/index.py"
     },
     {
-      "src": "/nparggu",
-      "dest": "/api/index.py"
+      "source": "/nparggu",
+      "destination": "/api/index.py"
     }
   ],
   "functions": {
