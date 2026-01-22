@@ -198,7 +198,87 @@ ANALYSIS_PROMPT = """Ты — эксперт по правовому анали�
 - Будь конкретен в ссылках на пункты документов
 - Учитывай специфику образовательной организации
 - Отвечай ТОЛЬКО валидным JSON без дополнительного текста
+- ОБЯЗАТЕЛЬНО указывай конкретные пункты/разделы/статьи анализируемого документа
+- Рекомендации должны быть привязаны к конкретному содержанию документа, а не общими фразами
 """
+
+# ==================== ПРОМПТ ВАЛИДАЦИИ ВХОДНЫХ ДАННЫХ ====================
+
+VALIDATION_PROMPT = """Ты — эксперт по классификации документов.
+
+Проанализируй следующий документ и определи, является ли он локальным нормативным актом (НПА) образовательной организации.
+
+=== ДОКУМЕНТ ===
+Название: {doc_name}
+
+Текст (первые 3000 символов):
+{doc_text}
+
+=== КРИТЕРИИ НПА ОБРАЗОВАТЕЛЬНОЙ ОРГАНИЗАЦИИ ===
+Документ является НПА образовательной организации, если он:
+1. Содержит признаки официального документа (реквизиты, подписи, даты, номера)
+2. Относится к деятельности образовательной организации (вуза, института, университета, академии, колледжа, школы)
+3. Регулирует внутренние процессы: учебный процесс, стипендии, внутренний распорядок, положения о подразделениях, регламенты, порядки, правила, инструкции
+4. Может упоминать: РГГУ, студентов, обучающихся, преподавателей, кафедры, факультеты, деканат, ректорат и т.п.
+
+НЕ является НПА образовательной организации:
+- Художественная литература, статьи, эссе
+- Личная переписка
+- Рекламные материалы
+- Документы других организаций (не образовательных)
+- Научные статьи и диссертации
+- Новостные материалы
+
+=== ОТВЕТ ===
+Верни JSON строго в формате:
+{{
+    "is_valid": true/false,
+    "document_type": "тип документа (например: 'Положение', 'Регламент', 'Приказ', 'Не НПА')",
+    "organization": "название организации если определено, иначе null",
+    "confidence": "high/medium/low",
+    "reason": "краткое обоснование решения (1-2 предложения)"
+}}
+
+Отвечай ТОЛЬКО валидным JSON."""
+
+# ==================== ПРОМПТ ВАЛИДАЦИИ ВЫХОДНЫХ ДАННЫХ ====================
+
+OUTPUT_VALIDATION_PROMPT = """Ты — контролёр качества экспертных заключений.
+
+Проверь качество экспертного анализа документа. Анализ должен быть конкретным и привязанным к содержанию документа.
+
+=== НАЗВАНИЕ ДОКУМЕНТА ===
+{doc_name}
+
+=== КРАТКОЕ СОДЕРЖАНИЕ ДОКУМЕНТА ===
+{doc_summary}
+
+=== РЕЗУЛЬТАТ АНАЛИЗА ===
+{analysis_json}
+
+=== КРИТЕРИИ КАЧЕСТВА ===
+
+ХОРОШИЙ анализ:
+- Ссылается на КОНКРЕТНЫЕ пункты, разделы, статьи анализируемого документа (например: "п. 3.2", "раздел 5", "ст. 12")
+- Рекомендации содержат конкретные предложения по изменению текста
+- Описания соответствий/расхождений упоминают специфику документа
+
+ПЛОХОЙ анализ:
+- Общие фразы без конкретики ("документ соответствует принципам", "рекомендуется дополнить")
+- Отсутствие ссылок на пункты анализируемого документа
+- Шаблонные рекомендации, не связанные с содержанием
+
+=== ОТВЕТ ===
+Верни JSON строго в формате:
+{{
+    "quality": "good/acceptable/poor",
+    "has_specific_references": true/false,
+    "has_specific_recommendations": true/false,
+    "issues": ["список проблем если есть"],
+    "verdict": "краткий вердикт (1 предложение)"
+}}
+
+Отвечай ТОЛЬКО валидным JSON."""
 
 # ==================== ФУНКЦИИ ПАРСИНГА ====================
 
@@ -236,6 +316,69 @@ def extract_text(file_path: Path) -> str:
 
 
 # ==================== LLM ИНТЕГРАЦИЯ ====================
+
+async def call_llm(prompt: str, max_tokens: int = 2048) -> str:
+    """Базовый вызов LLM"""
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://krechet.space",
+        "X-Title": "RGGU Expertise Service"
+    }
+
+    payload = {
+        "model": "anthropic/claude-3.5-sonnet",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "temperature": 0.1
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(OPENROUTER_URL, json=payload, headers=headers)
+        if response.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"Ошибка API: {response.status_code}")
+
+        result = response.json()
+        content = result["choices"][0]["message"]["content"]
+
+        # Извлекаем JSON из ответа
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0]
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0]
+
+        return content.strip()
+
+
+async def validate_input_document(doc_name: str, doc_text: str) -> dict:
+    """Проверка: является ли документ НПА образовательной организации"""
+    prompt = VALIDATION_PROMPT.format(
+        doc_name=doc_name,
+        doc_text=doc_text[:3000]
+    )
+
+    try:
+        content = await call_llm(prompt, max_tokens=512)
+        return json.loads(content)
+    except (json.JSONDecodeError, Exception) as e:
+        # При ошибке валидации пропускаем документ на анализ (fail-open)
+        return {"is_valid": True, "reason": "Ошибка валидации, документ допущен к анализу", "confidence": "low"}
+
+
+async def validate_output_quality(doc_name: str, doc_summary: str, analysis: dict) -> dict:
+    """Проверка качества выходного анализа"""
+    prompt = OUTPUT_VALIDATION_PROMPT.format(
+        doc_name=doc_name,
+        doc_summary=doc_summary[:1000] if doc_summary else "Не указано",
+        analysis_json=json.dumps(analysis, ensure_ascii=False, indent=2)[:3000]
+    )
+
+    try:
+        content = await call_llm(prompt, max_tokens=512)
+        return json.loads(content)
+    except (json.JSONDecodeError, Exception):
+        return {"quality": "acceptable", "verdict": "Проверка качества не выполнена"}
+
 
 async def analyze_document(doc_name: str, doc_text: str) -> dict:
     prompt = ANALYSIS_PROMPT.format(
@@ -576,19 +719,25 @@ HTML_PAGE = '''<!DOCTYPE html>
 
         function renderResultCard(result, index) {
             if (result.error) {
-                return `<div class="bg-white rounded-xl shadow-lg p-6 border-l-4 border-red-500">
+                const validationDetails = result.validation_details;
+                const isValidationError = result.error.includes('не является НПА');
+                return `<div class="bg-white rounded-xl shadow-lg p-6 border-l-4 border-${isValidationError ? 'orange' : 'red'}-500">
                     <div class="flex items-center gap-2">
-                        <span class="text-xl">❌</span>
+                        <span class="text-xl">${isValidationError ? '⚠️' : '❌'}</span>
                         <span class="font-semibold">${result.filename}</span>
                     </div>
-                    <p class="text-red-600 mt-2">${result.error}</p>
+                    <p class="text-${isValidationError ? 'orange' : 'red'}-600 mt-2">${result.error}</p>
+                    ${validationDetails ? `<p class="text-sm text-gray-500 mt-1">Тип: ${validationDetails.document_type || 'Не определён'}</p>` : ''}
                 </div>`;
             }
 
             const ukaz = result.ukaz_809 || {};
             const rasp = result.rasporyazhenie_1734 || {};
             const conclusion = result.conclusion || {};
+            const qualityCheck = result.quality_check || {};
+            const inputValidation = result.input_validation || {};
             const statusColor = conclusion.status === 'соответствует' ? 'green' : conclusion.status === 'частично соответствует' ? 'yellow' : 'red';
+            const qualityColor = qualityCheck.quality === 'good' ? 'green' : qualityCheck.quality === 'acceptable' ? 'yellow' : 'red';
 
             const renderList = (items, type) => {
                 if (!items || items.length === 0) return '<p class="text-gray-400 text-sm italic">Не выявлено</p>';
@@ -604,9 +753,14 @@ HTML_PAGE = '''<!DOCTYPE html>
                         <div>
                             <h3 class="font-semibold text-lg">📄 ${result.filename || result.document_name}</h3>
                             <p class="text-sm text-gray-500 mt-1">${result.summary || ''}</p>
+                            ${inputValidation.document_type ? `<p class="text-xs text-gray-400 mt-1">📋 ${inputValidation.document_type}${inputValidation.organization ? ' | ' + inputValidation.organization : ''}</p>` : ''}
                         </div>
-                        <span class="px-3 py-1 rounded-full text-sm font-medium bg-${statusColor}-100 text-${statusColor}-800">${conclusion.status || 'Анализ завершён'}</span>
+                        <div class="flex flex-col items-end gap-1">
+                            <span class="px-3 py-1 rounded-full text-sm font-medium bg-${statusColor}-100 text-${statusColor}-800">${conclusion.status || 'Анализ завершён'}</span>
+                            ${qualityCheck.quality ? `<span class="px-2 py-0.5 rounded text-xs bg-${qualityColor}-50 text-${qualityColor}-700" title="${qualityCheck.verdict || ''}">🔍 ${qualityCheck.quality === 'good' ? 'Качество: высокое' : qualityCheck.quality === 'acceptable' ? 'Качество: приемлемое' : 'Качество: проверьте'}</span>` : ''}
+                        </div>
                     </div>
+                    ${conclusion.quality_warning ? `<div class="bg-orange-50 border border-orange-200 rounded-lg p-2 mb-3"><p class="text-xs text-orange-700">⚠️ ${conclusion.quality_warning}</p></div>` : ''}
                     <div class="grid grid-cols-2 gap-4 mb-4">
                         <div class="bg-gray-50 rounded-lg p-3">
                             <p class="text-sm font-medium text-gray-700">Указ № 809</p>
@@ -638,6 +792,7 @@ HTML_PAGE = '''<!DOCTYPE html>
                     </div>
                     ${conclusion.priority_recommendations && conclusion.priority_recommendations.length > 0 ?
                         `<div class="mt-6 bg-yellow-50 rounded-lg p-4"><p class="font-medium text-yellow-800 mb-2">⚡ Приоритетные рекомендации:</p><ul class="list-disc list-inside text-sm text-yellow-700">${conclusion.priority_recommendations.map(r => '<li>' + r + '</li>').join('')}</ul></div>` : ''}
+                    ${qualityCheck.verdict ? `<div class="mt-4 text-xs text-gray-500 border-t pt-3"><b>🔍 Проверка качества:</b> ${qualityCheck.verdict}</div>` : ''}
                 </div>
             </div>`;
         }
@@ -723,9 +878,52 @@ async def analyze_single_file(
         if not text.strip():
             result = {"filename": file.filename, "error": "Не удалось извлечь текст из документа"}
         else:
-            analysis = await analyze_document(file.filename, text)
-            analysis["filename"] = file.filename
-            result = analysis
+            # ========== КОНТУР 1: Проверка входных данных ==========
+            validation = await validate_input_document(file.filename, text)
+
+            if not validation.get("is_valid", True):
+                result = {
+                    "filename": file.filename,
+                    "error": f"Документ не является НПА образовательной организации. {validation.get('reason', '')}",
+                    "validation_details": {
+                        "document_type": validation.get("document_type", "Неизвестно"),
+                        "confidence": validation.get("confidence", "unknown")
+                    }
+                }
+            else:
+                # Проводим анализ
+                analysis = await analyze_document(file.filename, text)
+                analysis["filename"] = file.filename
+
+                # ========== КОНТУР 2: Проверка качества выходных данных ==========
+                quality_check = await validate_output_quality(
+                    file.filename,
+                    analysis.get("summary", ""),
+                    analysis
+                )
+
+                # Добавляем информацию о качестве анализа
+                analysis["quality_check"] = {
+                    "quality": quality_check.get("quality", "unknown"),
+                    "verdict": quality_check.get("verdict", ""),
+                    "has_specific_references": quality_check.get("has_specific_references", None)
+                }
+
+                # Добавляем информацию о валидации
+                analysis["input_validation"] = {
+                    "document_type": validation.get("document_type", "НПА"),
+                    "organization": validation.get("organization"),
+                    "confidence": validation.get("confidence", "unknown")
+                }
+
+                # Если качество плохое, добавляем предупреждение
+                if quality_check.get("quality") == "poor":
+                    if "conclusion" not in analysis:
+                        analysis["conclusion"] = {}
+                    analysis["conclusion"]["quality_warning"] = "Внимание: анализ может содержать общие рекомендации. Рекомендуется ручная проверка."
+
+                result = analysis
+
     except Exception as e:
         result = {"filename": file.filename, "error": str(e)}
     finally:
