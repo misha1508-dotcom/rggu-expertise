@@ -15,9 +15,18 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 app = FastAPI(title="Экспертиза локальных актов РГГУ")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Vercel использует /tmp для временных файлов
 UPLOADS_DIR = Path("/tmp/uploads")
@@ -250,10 +259,13 @@ async def analyze_document(doc_name: str, doc_text: str) -> dict:
         "temperature": 0.1
     }
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(OPENROUTER_URL, json=payload, headers=headers)
-        if response.status_code != 200:
-            raise HTTPException(status_code=500, detail=f"Ошибка API: {response.status_code}")
+    try:
+        async with httpx.AsyncClient(timeout=55.0) as client:
+            response = await client.post(OPENROUTER_URL, json=payload, headers=headers)
+            if response.status_code != 200:
+                raise HTTPException(status_code=500, detail=f"Ошибка API: {response.status_code} - {response.text[:200]}")
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Таймаут при обращении к AI. Попробуйте загрузить меньше файлов.")
 
         result = response.json()
         content = result["choices"][0]["message"]["content"]
